@@ -4,23 +4,27 @@ This file is the canonical snapshot of the repository's current development
 state. Read it immediately after `docs/STANDARDS.md` before selecting work.
 `docs/PHASE_STATUS.md` remains the authoritative ordered work-package tracker.
 
-Snapshot verified: 2026-08-16 for P6-WP04 on
-`phase-6-portable-operations`. The completed implementation publishes the
-operator migration/version matrix and adds only deterministic no-publication
-dry-run plus read-only portable-record status. Python 3.14.4 passes 23 focused
-P6 tests, the 60-test P6/P4 migration regression collection, and the 375-test
-full gate. Phase 5 remains the latest accepted phase at `v0.5.1-audit`;
-`v0.6.0` freezes P6 implementation for P6A but does not accept Phase 6.
+Snapshot verified: 2026-08-24 for P6A-001 production remediation on
+`phase-6-portable-operations`. The frozen independent P6A run from `v0.6.0`
+found a HIGH interrupted-staging/export blocker. The remediation reconciles
+only an exact empty stage belonging to the known interrupted run, preserves
+the strict archive gate and completed bytes, and aligns traced completion
+receipt validation across campaign and archive boundaries. Python 3.14.4
+passes the 75-test P6/P4 remediation collection, the unchanged 118-test P5
+collection, the 366-test accepted P1-P5 collection, and the 390-test full
+gate. Phase 5 remains the latest accepted phase at `v0.5.1-audit`; runtime and
+generated records remain 0.6.0. P6A remains incomplete pending a fresh
+independent rerun from the exact pushed remediation commit.
 
 | Field | Current state |
 | --- | --- |
-| Current phase | P6 – Phase 6 – Portable Operations (implementation complete; P6A not begun) |
-| Current work package | P6-WP04 – Operational documentation and migration (`COMPLETE`) |
-| Current branch | `phase-6-portable-operations` after P6-WP04 |
+| Current phase | P6 – Phase 6 – Portable Operations (P6A-001 remediated; P6A remains incomplete) |
+| Current work package | P6A – Phase 6 Audit (`INCOMPLETE`; fresh independent rerun required) |
+| Current branch | `phase-6-portable-operations` after P6A-001 production remediation |
 | Latest accepted phase | P5 – Phase 5 – Security and Distribution Hardening, accepted by P5A on 2026-08-15 |
 | Latest version tag | `v0.6.0` (P6 implementation prerequisite; not phase acceptance) |
-| Current test count | 375 passed, 0 failed, 0 skipped (`pytest -q`, 2026-08-16) |
-| Next planned work package | P6A – Phase 6 Audit in a fresh independent task; P7 and later work remain unauthorized |
+| Current test count | 390 passed, 0 failed, 0 skipped (`pytest -q`, 2026-08-24) |
+| Next planned work package | Fresh independent P6A rerun from the exact pushed remediation commit; P7 and later work remain unauthorized |
 
 ## Outstanding technical debt
 
@@ -235,6 +239,25 @@ full gate. Phase 5 remains the latest accepted phase at `v0.5.1-audit`;
   authorization, or calibration. P6 remains Linux-local, exact-versioned, and
   operator-mediated with no remote/cloud scheduler, automatic path/credential
   transfer, UI, or downgrade support. P6A remains required.
+- The frozen P6A audit reproduced P6A-001: real `SIGKILL` after persisted
+  `running` state could strand an empty hidden stage that stale recovery and
+  retry ignored, so reports passed but strict project export rejected the
+  unexpected artifact path. Production recovery now performs a deterministic
+  full-layout preflight and removes only one exact, empty, nonsymlinked,
+  inode-revalidated direct stage associated with the requested campaign's
+  known interrupted run before writing its explicit failure. Symlinked,
+  non-directory, nonempty/nested, malformed, ambiguous, unknown/non-running/
+  completed-run, and staging/canonical-conflict paths remain untouched and
+  fail explicitly. This deliberately cannot recover a nonempty partial stage:
+  it has no authenticated ownership journal, may contain operator data, and
+  remains a blocking state until ownership is resolved externally. The P4
+  exporter stays strict; current P6 receipt trace objects now use shared exact
+  campaign/archive field sets, while invalid trace types and unknown fields
+  fail closed. A clean installed 0.6.0 wheel passed the real-worker recovery,
+  retry/restart, report, and two-project export/verify/import round trip with
+  all earlier completed bytes unchanged. This is remediation evidence, not P6
+  acceptance; a fresh independent P6A rerun from the exact pushed remediation
+  commit remains mandatory.
 
 ## Pre-v1 roadmap boundary
 

@@ -46,6 +46,16 @@ runs only and never rewrites or reruns completed artifacts. Terminal completed
 items are not retryable. Stale workers produce deterministic queue and campaign
 audit transitions through the existing recovery path.
 
+A hard-killed worker can bypass its normal staging cleanup. Stale recovery now
+removes only one exact empty direct-child stage mapped to the requested
+campaign's known `running` run, after the complete artifact layout and all
+completed bytes validate and after device/inode/emptiness revalidation. It
+uses only `rmdir`, then records the retryable interruption; retry remains a
+separate operator action. Symlinked, non-directory, nonempty/nested,
+malformed, ambiguous, unknown-run, non-running/completed-run, or
+canonical-directory lookalikes fail with no deletion or campaign/queue state
+mutation.
+
 New destination run requests and completion receipts carry a strict portable
 trace containing the portable manifest/item, source project-definition and
 archive provenance, project/campaign/experiment/fixture, execution/model/
@@ -53,6 +63,12 @@ parameter/plugin identities, and run identity. Optional report generation can
 receive the canonical binding with `campaign report --portable-binding`; its
 portable traceability section keeps those identities separate from destination
 host/platform/Python/project environment metadata.
+
+The completion receipt remains eligible for later P4 project export,
+verification, and import. Campaign and archive verification share the exact
+legacy/current receipt field sets: a current traced receipt permits only the
+`portable_trace` object in addition to required fields, while invalid trace
+types or unknown extensions are rejected.
 
 ## Validation evidence
 
@@ -68,3 +84,33 @@ archive and P6-WP01/P6-WP02 regression tests are included in that full gate.
 P6-WP04 operational migration documentation and P6A independent audit remain
 incomplete. No cloud/remote scheduler, credential transfer, UI, scientific
 change, calibration promotion, or 3D/acceleration behavior is included.
+
+## P6A-001 production-remediation evidence
+
+The frozen `v0.6.0` audit found that a real `SIGKILL` could leave one empty
+campaign stage behind after stale recovery, explicit retry, and successful
+reporting, causing the later strict project export to fail. The remediation's
+focused subprocess regression uses two separately archived/imported projects,
+fresh portable binding/activation and scheduler identity, exact PID plus Linux
+process-start verification, and a real worker `SIGKILL`. Stale status removes
+the exact empty stage and records attempt-1 `interrupted`; explicit retry plus
+a fresh unpatched worker completes only that run at attempt 2. Prior project
+state, completed artifacts/receipts, queue audit prefixes, and portable records
+remain byte-equal; projects and trace identities remain disjoint; reports and
+both project export/verify/import round trips pass.
+
+A separate clean installed-wheel replay used BioMesh 0.6.0 from a disposable
+clean commit containing exactly the two production remediation files. It killed
+worker PID 696226 with return code -9 after exact process-start verification,
+recovered Project B to 2 completed/1 interrupted/37 pending with the stage
+absent, then completed 40/40 after explicit retry while Project A remained
+1/1. All 17 prior A files and 34 prior B files retained their hashes; the
+40-run report had no missing run. Project A and B archives verified/imported at
+1 and 40 completions with byte-equal artifact trees. The wheel SHA-256 was
+`d9a4aea63707ecc2248a636563711aed7f9f0fcaa1e5e102e2f51e7852f6b3f3`.
+
+Python 3.14.4 passed the 75-test P6/P4 remediation collection and 390-test full
+suite with no failures or skips, plus Ruff, strict mypy over 72 source files,
+module help, and diff checks. This remediates P6A-001 only; P6A remains
+`INCOMPLETE` and requires a fresh independent audit from the exact pushed
+remediation commit.

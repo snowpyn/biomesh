@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import tempfile
 from collections import Counter
 from collections.abc import Callable, Iterator, Sequence
@@ -48,6 +49,16 @@ COMPLETION_RECEIPT_SCHEMA_VERSION = 2
 PROJECT_MANIFEST = "project.json"
 PROJECT_STATE = "campaign_state.json"
 COMPLETION_RECEIPT = ".biomesh-completion.json"
+LEGACY_COMPLETION_RECEIPT_FIELDS = frozenset(
+    {"artifacts", "attempt", "run_id", "schema_version"}
+)
+CURRENT_COMPLETION_RECEIPT_REQUIRED_FIELDS = LEGACY_COMPLETION_RECEIPT_FIELDS | {
+    "execution_identity",
+    "execution_identity_sha256",
+}
+CURRENT_COMPLETION_RECEIPT_OPTIONAL_FIELDS = frozenset({"portable_trace"})
+_STAGING_SUFFIX_LENGTH = 8
+_STAGING_SUFFIX_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
 
 Identifier = Annotated[
     str,
@@ -403,6 +414,16 @@ RunExecutor = Callable[[RunExecutionRequest, Path], None]
 
 
 @dataclass(frozen=True, slots=True)
+class _InterruptedArtifactStaging:
+    """One exact empty staging directory owned by an interrupted run."""
+
+    run_id: str
+    path: Path
+    device: int
+    inode: int
+
+
+@dataclass(frozen=True, slots=True)
 class CampaignStatus:
     """Compact status returned by public campaign operations."""
 
@@ -588,7 +609,7 @@ class CampaignService:
     def resume(self, campaign_id: str) -> CampaignStatus:
         """Reconcile interrupted work and execute only pending campaign runs."""
         with self._lock():
-            definition, state = self._load()
+            definition, state = self._load(verify_artifacts=False)
             _campaign(definition, campaign_id)
             _require_execution_identity(definition, state, campaign_id)
             state = self._reconcile_interrupted(definition, state, campaign_id)
@@ -599,7 +620,7 @@ class CampaignService:
     ) -> CampaignStatus:
         """Explicitly schedule failed runs, preserving completed-run immutability."""
         with self._lock():
-            definition, state = self._load()
+            definition, state = self._load(verify_artifacts=False)
             _campaign(definition, campaign_id)
             _require_execution_identity(definition, state, campaign_id)
             state = self._reconcile_interrupted(definition, state, campaign_id)
@@ -653,7 +674,7 @@ class CampaignService:
     ) -> CampaignStatus:
         """Reconcile a dead local worker without scheduling additional runs."""
         with self._lock():
-            definition, state = self._load()
+            definition, state = self._load(verify_artifacts=False)
             _campaign(definition, campaign_id)
             state = self._reconcile_interrupted(
                 definition,
@@ -736,6 +757,11 @@ class CampaignService:
         *,
         cancellation_requested: bool = False,
     ) -> ProjectState:
+        staging = self._verify_artifact_layout(
+            definition,
+            state,
+            recovery_campaign_id=campaign_id,
+        )
         replacements: dict[str, RunRecord] = {}
         audit = list(state.audit)
         for run in state.runs:
@@ -793,6 +819,17 @@ class CampaignService:
                 "audit": audit,
             }
         )
+        if staging is not None:
+            rechecked = self._verify_artifact_layout(
+                definition,
+                state,
+                recovery_campaign_id=campaign_id,
+            )
+            if rechecked != staging:
+                raise ProjectCampaignError(
+                    "interrupted artifact staging path changed during recovery"
+                )
+            self._remove_interrupted_artifact_staging(staging)
         self._write_state(updated)
         return updated
 
@@ -944,19 +981,20 @@ class CampaignService:
         if not isinstance(payload, dict):
             raise ProjectCampaignError("invalid completion receipt fields")
         receipt_version = payload.get("schema_version")
-        legacy_fields = {"artifacts", "attempt", "run_id", "schema_version"}
-        current_fields = legacy_fields | {
-            "execution_identity",
-            "execution_identity_sha256",
-            "portable_trace",
-        }
         if receipt_version == LEGACY_PROJECT_SCHEMA_VERSION:
-            if set(payload) != legacy_fields or execution_identity is not None:
+            if (
+                set(payload) != LEGACY_COMPLETION_RECEIPT_FIELDS
+                or execution_identity is not None
+            ):
                 raise ProjectCampaignError("invalid legacy completion receipt fields")
         elif receipt_version == COMPLETION_RECEIPT_SCHEMA_VERSION:
             if (
                 set(payload)
-                not in (current_fields, current_fields - {"portable_trace"})
+                not in (
+                    CURRENT_COMPLETION_RECEIPT_REQUIRED_FIELDS,
+                    CURRENT_COMPLETION_RECEIPT_REQUIRED_FIELDS
+                    | CURRENT_COMPLETION_RECEIPT_OPTIONAL_FIELDS,
+                )
                 or execution_identity is None
             ):
                 raise ProjectCampaignError("invalid completion receipt fields")
@@ -974,8 +1012,9 @@ class CampaignService:
                 != execution_identity_sha256(execution_identity)
             ):
                 raise ProjectCampaignError("completion execution identity mismatch")
-            trace = payload.get("portable_trace")
-            if trace is not None and not isinstance(trace, dict):
+            if "portable_trace" in payload and not isinstance(
+                payload["portable_trace"], dict
+            ):
                 raise ProjectCampaignError("invalid portable completion trace")
         else:
             raise ProjectCampaignError("unsupported completion receipt schema_version")
@@ -992,17 +1031,66 @@ class CampaignService:
         return artifacts
 
     def _verify_artifact_layout(
-        self, definition: ProjectDefinition, state: ProjectState
-    ) -> None:
+        self,
+        definition: ProjectDefinition,
+        state: ProjectState,
+        *,
+        recovery_campaign_id: str | None = None,
+    ) -> _InterruptedArtifactStaging | None:
         artifact_root = self.project_directory / "artifacts"
         run_by_id = {run.run_id: run for run in state.runs}
-        for path in artifact_root.iterdir():
+        if recovery_campaign_id is not None:
+            running = [
+                run
+                for run in state.runs
+                if run.campaign_id == recovery_campaign_id
+                and run.status is CampaignRunStatus.RUNNING
+            ]
+            if len(running) > 1:
+                raise ProjectCampaignError(
+                    "interrupted campaign has ambiguous concurrent running runs"
+                )
+        staging: _InterruptedArtifactStaging | None = None
+        canonical_directories: set[str] = set()
+        try:
+            paths = tuple(sorted(artifact_root.iterdir(), key=lambda item: item.name))
+        except OSError as error:
+            raise ProjectCampaignError(
+                f"unable to inspect project artifact layout: {error}"
+            ) from error
+        for path in paths:
+            try:
+                metadata = path.lstat()
+            except OSError as error:
+                raise ProjectCampaignError(
+                    f"unable to inspect project artifact path {path.name}: {error}"
+                ) from error
+            if stat.S_ISLNK(metadata.st_mode):
+                raise ProjectCampaignError(
+                    "project artifact paths must not be symlinks"
+                )
+            if not stat.S_ISDIR(metadata.st_mode):
+                raise ProjectCampaignError(
+                    "project artifact direct children must be directories"
+                )
             if path.name.startswith("."):
-                if path.is_symlink():
+                if recovery_campaign_id is None:
                     raise ProjectCampaignError(
-                        "artifact staging path must not be a symlink"
+                        "project contains an unreconciled artifact staging directory"
                     )
+                candidate = self._inspect_interrupted_artifact_staging(
+                    path,
+                    metadata,
+                    run_by_id=run_by_id,
+                    campaign_id=recovery_campaign_id,
+                )
+                if staging is not None:
+                    raise ProjectCampaignError(
+                        "ambiguous artifact staging directories for interrupted work"
+                    )
+                staging = candidate
                 continue
+            canonical_directories.add(path.name)
             run = run_by_id.get(path.name)
             if run is None:
                 raise ProjectCampaignError(
@@ -1015,6 +1103,10 @@ class CampaignService:
                 raise ProjectCampaignError(
                     f"non-running run has unexpected artifacts: {run.run_id}"
                 )
+        if staging is not None and staging.run_id in canonical_directories:
+            raise ProjectCampaignError(
+                "interrupted run has both staging and canonical artifact directories"
+            )
         for run in state.runs:
             if run.status is CampaignRunStatus.COMPLETED:
                 directory = self.project_directory / "artifacts" / run.run_id
@@ -1026,6 +1118,142 @@ class CampaignService:
                         "completed run receipt does not match project state"
                     )
                 _verify_artifact_directory(directory, tuple(run.artifacts))
+        return staging
+
+    def _inspect_interrupted_artifact_staging(
+        self,
+        path: Path,
+        metadata: os.stat_result,
+        *,
+        run_by_id: dict[str, RunRecord],
+        campaign_id: str,
+    ) -> _InterruptedArtifactStaging:
+        run_id, separator, suffix = path.name[1:].rpartition(".")
+        if (
+            not separator
+            or not run_id
+            or len(suffix) != _STAGING_SUFFIX_LENGTH
+            or any(character not in _STAGING_SUFFIX_CHARACTERS for character in suffix)
+        ):
+            raise ProjectCampaignError(
+                f"malformed interrupted artifact staging path: {path.name}"
+            )
+        run = run_by_id.get(run_id)
+        if run is None:
+            raise ProjectCampaignError(
+                f"artifact staging path references unknown run: {path.name}"
+            )
+        if (
+            run.campaign_id != campaign_id
+            or run.status is not CampaignRunStatus.RUNNING
+        ):
+            raise ProjectCampaignError(
+                "artifact staging path is not associated with the interrupted "
+                f"campaign run: {path.name}"
+            )
+        final = path.parent / run_id
+        if final.exists() or final.is_symlink():
+            raise ProjectCampaignError(
+                "interrupted run has both staging and canonical artifact directories"
+            )
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        descriptor: int | None = None
+        try:
+            descriptor = os.open(path, flags)
+            opened = os.fstat(descriptor)
+            if (
+                opened.st_dev != metadata.st_dev
+                or opened.st_ino != metadata.st_ino
+                or not stat.S_ISDIR(opened.st_mode)
+            ):
+                raise ProjectCampaignError(
+                    "interrupted artifact staging path changed during inspection"
+                )
+            if os.listdir(descriptor):
+                raise ProjectCampaignError(
+                    "interrupted artifact staging directory is not empty: "
+                    f"{path.name}"
+                )
+        except OSError as error:
+            raise ProjectCampaignError(
+                f"unable to inspect interrupted artifact staging path {path.name}: "
+                f"{error}"
+            ) from error
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+        return _InterruptedArtifactStaging(
+            run_id=run_id,
+            path=path,
+            device=metadata.st_dev,
+            inode=metadata.st_ino,
+        )
+
+    def _remove_interrupted_artifact_staging(
+        self, staging: _InterruptedArtifactStaging
+    ) -> None:
+        artifact_root = self.project_directory / "artifacts"
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        root_descriptor: int | None = None
+        staging_descriptor: int | None = None
+        try:
+            root_descriptor = os.open(artifact_root, flags)
+            current = os.stat(
+                staging.path.name,
+                dir_fd=root_descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                current.st_dev != staging.device
+                or current.st_ino != staging.inode
+                or not stat.S_ISDIR(current.st_mode)
+            ):
+                raise ProjectCampaignError(
+                    "interrupted artifact staging path changed during recovery"
+                )
+            staging_descriptor = os.open(
+                staging.path.name,
+                flags,
+                dir_fd=root_descriptor,
+            )
+            opened = os.fstat(staging_descriptor)
+            if (
+                opened.st_dev != staging.device
+                or opened.st_ino != staging.inode
+                or os.listdir(staging_descriptor)
+            ):
+                raise ProjectCampaignError(
+                    "interrupted artifact staging path changed during recovery"
+                )
+            if staging.run_id in os.listdir(root_descriptor):
+                raise ProjectCampaignError(
+                    "interrupted run has both staging and canonical artifact "
+                    "directories"
+                )
+            latest = os.stat(
+                staging.path.name,
+                dir_fd=root_descriptor,
+                follow_symlinks=False,
+            )
+            if (
+                latest.st_dev != staging.device
+                or latest.st_ino != staging.inode
+                or not stat.S_ISDIR(latest.st_mode)
+            ):
+                raise ProjectCampaignError(
+                    "interrupted artifact staging path changed during recovery"
+                )
+            os.rmdir(staging.path.name, dir_fd=root_descriptor)
+        except OSError as error:
+            raise ProjectCampaignError(
+                "unable to remove interrupted artifact staging path "
+                f"{staging.path.name}: {error}"
+            ) from error
+        finally:
+            if staging_descriptor is not None:
+                os.close(staging_descriptor)
+            if root_descriptor is not None:
+                os.close(root_descriptor)
 
 
 def execute_application_run(request: RunExecutionRequest, output: Path) -> None:

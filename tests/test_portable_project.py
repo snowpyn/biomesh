@@ -23,6 +23,7 @@ from biomesh.portable_project import (
 )
 from biomesh.portable_project_types import PortableArchiveError
 from biomesh.project_campaign import (
+    COMPLETION_RECEIPT,
     CampaignRecord,
     CampaignService,
     ExperimentRecord,
@@ -223,6 +224,59 @@ def test_archive_cross_checks_results_against_campaign_state(tmp_path: Path) -> 
         for name, contents in members.items():
             archive.writestr(name, contents)
     with pytest.raises(PortableArchiveError, match="artifact identity mismatch"):
+        verify_project_archive(altered, allow_unauthenticated=True)
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value", "error_pattern"),
+    [
+        ("portable_trace", None, "invalid portable completion trace"),
+        ("portable_trace", [], "invalid portable completion trace"),
+        (
+            "portable_trace",
+            "not-a-portable-trace",
+            "invalid portable completion trace",
+        ),
+        (
+            "unexpected_field",
+            "must remain fail-closed",
+            "invalid portable completion receipt fields",
+        ),
+    ],
+    ids=["null-trace", "list-trace", "scalar-trace", "unknown-field"],
+)
+def test_archive_rejects_invalid_completion_receipt_extension(
+    tmp_path: Path,
+    field: str,
+    invalid_value: object,
+    error_pattern: str,
+) -> None:
+    project = _project(tmp_path)
+    archive_path = tmp_path / "project.biomesh"
+    export_project_archive(project, archive_path)
+    with zipfile.ZipFile(archive_path) as archive:
+        members = {name: archive.read(name) for name in archive.namelist()}
+
+    target = next(name for name in members if name.endswith(COMPLETION_RECEIPT))
+    receipt = json.loads(members[target])
+    receipt[field] = invalid_value
+    members[target] = (
+        json.dumps(receipt, indent=2, sort_keys=True) + "\n"
+    ).encode()
+    manifest = json.loads(members["archive.json"])
+    record = next(item for item in manifest["files"] if item["path"] == target)
+    record["size_bytes"] = len(members[target])
+    record["sha256"] = hashlib.sha256(members[target]).hexdigest()
+    members["archive.json"] = (
+        json.dumps(manifest, indent=2, separators=(",", ":")) + "\n"
+    ).encode()
+
+    altered = tmp_path / "invalid-receipt.biomesh"
+    with zipfile.ZipFile(altered, mode="w", compression=zipfile.ZIP_STORED) as archive:
+        for name, contents in members.items():
+            archive.writestr(name, contents)
+
+    with pytest.raises(PortableArchiveError, match=error_pattern):
         verify_project_archive(altered, allow_unauthenticated=True)
 
 

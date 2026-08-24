@@ -34,6 +34,16 @@ runs remain explicit. Export rejects running work, symlinks, unexpected or
 unpublished artifact paths, fixture drift, and any completed-artifact mismatch.
 The source project is held under its campaign lock and is never rewritten.
 
+Current completion receipts have one shared exact field contract across the
+campaign and archive verifiers. The already-governed P6 `portable_trace` may be
+present only as the sole optional top-level field and must be a JSON object;
+untraced P4 receipts omit it. Null, list, scalar, unknown-field, and legacy
+extensions fail closed. Archive export does not ignore or remove a hidden
+staging path: first use the supported campaign/queue stale-recovery boundary,
+which may reconcile only the exact empty staging directory associated with a
+known interrupted run. Unsafe or uncertain staging state remains unexportable
+and untouched.
+
 Use new targets for all operations:
 
 ```bash

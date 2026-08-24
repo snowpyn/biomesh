@@ -1071,6 +1071,65 @@ P6-WP04 validation evidence:
   incomplete; no remote/cloud scheduler, UI, credentials, trust/calibration
   promotion, science, or acceleration behavior is included.
 
+P6A-001 production-remediation evidence (2026-08-24; audit remains
+incomplete):
+
+- The independent P6A run from frozen tag `v0.6.0` reproduced HIGH finding
+  P6A-001 with a provenance-bound wheel installed into a clean Python 3.14.4
+  environment. After one destination-project run completed and the next was
+  persisted `running`, the exact queue worker was killed with `SIGKILL` at the
+  empty staging-directory boundary. Stale recovery recorded `interrupted`,
+  explicit retry completed all work, prior completed bytes remained equal,
+  and the report succeeded, but the hidden direct-child stage remained and
+  `project export` failed with `project contains unpublished or unexpected
+  artifact directories`.
+- Recovery now recognizes only the exact eight-character Python 3.14 tempfile
+  suffix for one empty, nonsymlinked direct directory associated with the
+  requested campaign's sole known `running` run while the canonical run
+  directory is absent. It verifies the whole layout and completed artifact/
+  receipt bytes before mutation, records device/inode identity, reopens and
+  rechecks emptiness and identity, uses only `rmdir`, then atomically records
+  the interruption. Every unsafe or uncertain staging shape fails explicitly
+  and remains untouched.
+- The P4 archive validator retains its strict unexpected-path gate and now
+  consumes the same exact current/legacy completion-receipt field sets as the
+  campaign verifier. A current receipt may carry only the already-governed P6
+  `portable_trace` object as its optional top-level field; null, list, scalar,
+  unknown, and legacy extensions fail closed. This closes the traced-receipt
+  export boundary exposed only after the orphan stage was removed.
+- A focused real-worker regression creates and activates a two-project
+  portable queue, verifies exact PID/process-start identity and an empty
+  direct stage, kills that worker with real `SIGKILL`, performs stale recovery,
+  explicit retry, and a fresh restart, and proves attempt-2-only retry, no
+  duplicate completion, project separation, portable-trace identity, prior
+  state/artifact/receipt byte equality, report success, and subsequent project
+  export/verify/import equality. Focused symlink, non-directory, malformed,
+  ambiguous, unknown-run, nonempty/nested, and completed-run-lookalike cases
+  prove failure leaves campaign state, completed bytes, operator files, and
+  paths unchanged.
+- A provenance-bound 0.6.0 wheel built from a disposable clean commit
+  containing exactly the two production remediation files was installed into
+  a fresh Python 3.14.4 environment with checkout import paths removed. Its
+  real-worker replay recovered 2 completed/1 interrupted/37 pending runs with
+  the exact stage absent, explicitly retried to 40/40 at attempt 2, preserved
+  17 earlier A and 34 earlier B files, reported 40 completed/0 missing, and
+  exported/verified/imported both projects with byte-equal artifact trees. The
+  wheel SHA-256 was
+  `d9a4aea63707ecc2248a636563711aed7f9f0fcaa1e5e102e2f51e7852f6b3f3`.
+- Python 3.14.4 passed the 75-test P6/P4 remediation collection, the unchanged
+  118-test accepted P5 security/distribution collection, and the 366-test
+  accepted P1-P5 collection, plus the 390-test full suite with no failures or
+  skips. Host Bubblewrap 0.11.1, util-linux `prlimit` 2.41.3, libseccomp, the
+  22-test sandbox collection, documented CLI examples or automated
+  equivalents, module help, `validate all`, Ruff, strict mypy over 72 source
+  files, and `git diff --check` passed. Runtime/package/generated-manifest
+  version remains 0.6.0; no remote scheduler, UI, credentials,
+  trust/calibration promotion, science, or acceleration behavior was added.
+- This evidence remediates production finding P6A-001 only. P6A remains
+  `INCOMPLETE`; it must rerun as a fresh independent audit from the exact
+  pushed remediation commit. No accepted-audit record, phase acceptance,
+  merge, audit branch, or tag is created by this remediation.
+
 ## P7 – Phase 7 – Calibration and Validation
 
 Source: `docs/10_PRE_V1_ROADMAP.md`.
@@ -1116,9 +1175,11 @@ Source: `docs/10_PRE_V1_ROADMAP.md`.
 
 ## Next Work Package
 
-`P6A – Phase 6 Audit` is the first incomplete pre-v1 item. It must begin in a
-fresh independent audit task from the exact pushed `v0.6.0` implementation
-tag. P6 implementation completion does not accept Phase 6 or authorize P7.
+`P6A – Phase 6 Audit` remains the first incomplete pre-v1 item. Because the
+frozen `v0.6.0` audit found P6A-001, it must rerun in a fresh independent task
+from the exact pushed P6A-001 remediation commit descended from `v0.6.0`, not
+from the original vulnerable tag alone. Remediation does not accept Phase 6
+or authorize P7.
 
 ## Remaining Issues
 

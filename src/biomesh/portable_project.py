@@ -25,6 +25,9 @@ from biomesh.portable_project_types import (
 from biomesh.project_campaign import (
     COMPLETION_RECEIPT,
     COMPLETION_RECEIPT_SCHEMA_VERSION,
+    CURRENT_COMPLETION_RECEIPT_OPTIONAL_FIELDS,
+    CURRENT_COMPLETION_RECEIPT_REQUIRED_FIELDS,
+    LEGACY_COMPLETION_RECEIPT_FIELDS,
     LEGACY_PROJECT_SCHEMA_VERSION,
     PROJECT_MANIFEST,
     PROJECT_STATE,
@@ -497,18 +500,24 @@ def _validate_completion_receipt(
     if not isinstance(value, dict):
         raise PortableArchiveError("invalid portable completion receipt fields")
     receipt_version = value.get("schema_version")
-    legacy_fields = {"artifacts", "attempt", "run_id", "schema_version"}
-    current_fields = legacy_fields | {
-        "execution_identity",
-        "execution_identity_sha256",
-    }
     if receipt_version == LEGACY_PROJECT_SCHEMA_VERSION:
-        if set(value) != legacy_fields or execution_identity is not None:
+        if (
+            set(value) != LEGACY_COMPLETION_RECEIPT_FIELDS
+            or execution_identity is not None
+        ):
             raise PortableArchiveError(
                 "invalid legacy portable completion receipt fields"
             )
     elif receipt_version == COMPLETION_RECEIPT_SCHEMA_VERSION:
-        if set(value) != current_fields or execution_identity is None:
+        if (
+            set(value)
+            not in (
+                CURRENT_COMPLETION_RECEIPT_REQUIRED_FIELDS,
+                CURRENT_COMPLETION_RECEIPT_REQUIRED_FIELDS
+                | CURRENT_COMPLETION_RECEIPT_OPTIONAL_FIELDS,
+            )
+            or execution_identity is None
+        ):
             raise PortableArchiveError(
                 "invalid portable completion receipt fields"
             )
@@ -528,6 +537,10 @@ def _validate_completion_receipt(
             raise PortableArchiveError(
                 "portable completion execution identity mismatch"
             )
+        if "portable_trace" in value and not isinstance(
+            value["portable_trace"], dict
+        ):
+            raise PortableArchiveError("invalid portable completion trace")
     else:
         raise PortableArchiveError(
             "unsupported portable completion receipt schema_version"

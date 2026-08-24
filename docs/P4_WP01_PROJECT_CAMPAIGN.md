@@ -74,6 +74,21 @@ are never scheduled by resume or retry, and any later artifact change fails
 closed. Failed runs retain their error and attempt count until `campaign retry`
 is explicitly requested.
 
+If process death bypasses staging cleanup, the recovery path may remove only
+one empty, nonsymlinked direct child named exactly
+`.<running-run-id>.<eight Python-3.14 tempfile characters>`. The run must be the
+sole `running` run in the requested campaign, its canonical
+`artifacts/<run-id>` path must be absent, and every other direct artifact path,
+completed receipt, and completed byte must validate first. Recovery records
+the staging device/inode, reopens and rechecks the same empty directory, uses
+nonrecursive `rmdir`, and only then writes the explicit interruption. It never
+follows or deletes a symlink, non-directory, nonempty/nested stage, malformed
+or ambiguous name, unknown/non-running/completed-run lookalike, canonical
+completed directory, or arbitrary operator file. Such state fails explicitly
+without cleanup or state/artifact mutation. Ordinary status/report verification
+does not hide an unreconciled staging directory; use the supported resume,
+retry, or P4-WP05 stale-worker recovery boundary.
+
 ## CLI application paths
 
 ```text

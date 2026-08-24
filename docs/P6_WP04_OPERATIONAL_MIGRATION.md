@@ -197,7 +197,11 @@ python -m biomesh queue status /srv/biomesh/destination/queue
 Cancellation preserves completed publications. Interrupted unpublished work
 becomes an explicit retryable failure. After crash/restart, `queue status`
 verifies the dead worker identity and reconciles completed/cancelled/interrupted
-state. Inspect, then retry only retained failed work:
+state. If `SIGKILL` left one exact empty direct-child stage for the persisted
+running run, this supported recovery validates all artifact paths and completed
+bytes, removes only that inode-checked empty directory with `rmdir`, and then
+records `interrupted`. It does not delete partial contents or guess ownership.
+Inspect, then retry only retained failed work:
 
 ```bash
 python -m biomesh campaign status \
@@ -244,6 +248,7 @@ and the declared new target unchanged.
 | Duplicate activation | Activate again into the existing destination queue | `activation queue already exists`; inspect it and retain history |
 | Trust/authorization non-transfer | Inspect a binding imported from an authenticated source | Source status is provenance; destination fields remain `NOT_GRANTED` |
 | Calibration non-promotion | Inspect any imported/bound item | It remains `CALIBRATION_REQUIRED`; migration cannot promote it |
+| Unsafe interrupted stage | `queue status` reports a symlink, non-directory, nonempty/nested, malformed, ambiguous, unknown/non-running/completed-run, or staging/canonical conflict | Preserve the project and operator files unchanged; do not manually rename/delete or retry. Resolve ownership externally, then rerun recovery from an exact safe state |
 | Unsupported downgrade/migration | Use older/different runtime, future schema, or copy a P4 queue | Use matching 0.6.0 schema-1 commands and fresh destination state |
 
 ## Atomicity, artifact separation, and limitations
@@ -265,9 +270,15 @@ project roots and are never copied into queue records, rewritten, or rerun.
 - Live PID/lock/resource state and source cancellation/failure history do not
   transfer. Exact BioMesh 0.6.0/schema-1 compatibility is required.
 - Resource limits are policy/feasibility constraints, not benchmark results.
+- Only an exact empty stage has enough ownership evidence for automatic
+  reconciliation. A stage containing any partial output remains untouched and
+  blocks status/report/export until an operator resolves ownership; supporting
+  authenticated nonempty-stage recovery would require a new governed journal
+  and is outside P6A-001.
 - All biology remains `CALIBRATION_REQUIRED`; no calibration is promoted.
-- P6A is a separate independent audit. The implementation tag is only its
-  frozen prerequisite and does not accept Phase 6.
+- P6A is a separate independent audit. `v0.6.0` is its historical frozen
+  baseline; after P6A-001, the fresh rerun prerequisite is the exact pushed
+  remediation commit. Neither the tag nor remediation accepts Phase 6.
 
 ## Validation evidence
 
@@ -286,3 +297,38 @@ destination report comparison. Portable report content matched after the
 separately recorded environment fields were removed, and project paths were
 distinct. This is software portability evidence, not P6A acceptance,
 biological calibration, scientific validation, or a performance benchmark.
+
+### P6A-001 remediation rehearsal
+
+The independent frozen-release reproduction built and clean-installed the
+canonical `v0.6.0` wheel, killed the exact active destination worker with real
+`SIGKILL` after completed and persisted-running work coexisted, and confirmed
+the original failure: stale recovery and explicit retry completed 40/40 runs
+with prior bytes unchanged and reporting successful, but the empty hidden
+stage remained and `project export` rejected the unexpected artifact path.
+
+The post-remediation replay built a new provenance-bound BioMesh 0.6.0 wheel
+from a disposable clean commit containing exactly the current two production
+remediation files. The installed package was loaded only from its fresh Python
+3.14.4 environment with no checkout `PYTHONPATH`. Exact PID/process-start
+identity and the empty direct stage were revalidated before `SIGKILL` returned
+-9. `queue status` removed that stage and recorded `interrupted`; explicit
+retry and a fresh worker preserved every earlier A/B completed byte, completed
+only the interrupted run at attempt 2, and kept all project/run/portable
+identities separated. The 40-run report completed with no missing runs.
+
+Both completed projects then passed the supported archive closure. Project A
+exported/verified/imported 1 completion and 25 files at archive SHA-256
+`f3c53334eb59a230ecf6f5e6df14d10edb8ecd1e67b4e615360c5c45e37b3f12`;
+Project B exported/verified/imported 40 completions and 688 files at
+`15ff8048369ebfbfac3e550878dc6f2e170e722245a26007240a76e61f0d9097`.
+Both imported artifact trees were byte-equal. The installed wheel SHA-256 was
+`d9a4aea63707ecc2248a636563711aed7f9f0fcaa1e5e102e2f51e7852f6b3f3`.
+
+The final source gate passed the 75-test P6/P4 remediation collection, the
+unchanged 118-test P5 collection, the 366-test accepted P1-P5 collection, and
+all 390 tests with no failures or skips, plus host-level sandbox checks, Ruff,
+strict mypy over 72 source files, module help, documented examples or automated
+equivalents, and diff checks. P6A remains `INCOMPLETE`; these records require a
+fresh independent P6A rerun from the exact pushed remediation commit and do not
+accept Phase 6 or authorize P7.

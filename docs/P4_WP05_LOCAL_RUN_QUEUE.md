@@ -61,6 +61,17 @@ becomes an explicit retryable `interrupted` failure. Completed artifacts are
 reverified and never rerun or rewritten. Unstarted queued work remains queued
 across application restarts.
 
+When an exact dead worker left the campaign's own empty direct staging
+directory, reconciliation validates the complete artifact layout, removes only
+that known empty directory through the P4-WP01 recovery boundary, and then
+records the interruption. Any symlink, non-directory, contents, malformed or
+unknown association, duplicate/ambiguous candidate, completed-run lookalike,
+or staging/canonical coexistence aborts queue reconciliation before queue or
+campaign state changes and leaves every path untouched. Operators must inspect
+and preserve such uncertain state; queue status never recursively deletes or
+guesses ownership. An explicit `queue retry` remains required after safe stale
+recovery and completed work is never scheduled again.
+
 ## Application paths
 
 ```text

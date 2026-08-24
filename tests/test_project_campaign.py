@@ -221,14 +221,179 @@ def test_interrupted_run_becomes_explicit_failure_and_other_work_resumes(
     service = CampaignService(project, executor=executor)
     with pytest.raises(KeyboardInterrupt):
         service.resume("campaign-a")
-    assert service.status("campaign-a").running == 1
+    interrupted_state = json.loads((project / "campaign_state.json").read_text())
+    running = next(
+        run for run in interrupted_state["runs"] if run["status"] == "running"
+    )
+    staging = project / "artifacts" / f".{running['run_id']}.abcdefgh"
+    staging.mkdir()
+
+    with pytest.raises(ProjectCampaignError, match="unreconciled artifact staging"):
+        service.status("campaign-a")
 
     resumed = service.resume("campaign-a")
     assert (resumed.completed, resumed.failed, resumed.running) == (1, 1, 0)
+    assert not staging.exists()
     state = json.loads((project / "campaign_state.json").read_text())
     failure = next(run for run in state["runs"] if run["status"] == "failed")
     assert failure["failure"]["kind"] == "interrupted"
     assert any(record["action"] == "run_failed" for record in state["audit"])
+
+
+@pytest.mark.parametrize(
+    "unsafe_case",
+    [
+        "symlinked",
+        "regular-file",
+        "malformed",
+        "ambiguous",
+        "unknown-run",
+        "nonempty-nested",
+    ],
+)
+def test_interrupted_staging_recovery_rejects_unsafe_layout_without_mutation(
+    tmp_path: Path,
+    unsafe_case: str,
+) -> None:
+    case_root = tmp_path / unsafe_case
+    case_root.mkdir()
+    project = _create(case_root, _definition(replicate_count=1, points=1))
+
+    def interrupt(_request: RunExecutionRequest, _output: Path) -> None:
+        raise KeyboardInterrupt
+
+    service = CampaignService(project, executor=interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        service.resume("campaign-a")
+    state_path = project / "campaign_state.json"
+    state_before = state_path.read_bytes()
+    state = json.loads(state_before)
+    run_id = state["runs"][0]["run_id"]
+    artifact_root = project / "artifacts"
+    exact = artifact_root / f".{run_id}.abcdefgh"
+    retained: list[Path] = []
+    operator_file: Path | None = None
+    symlink_target: Path | None = None
+
+    if unsafe_case == "symlinked":
+        symlink_target = case_root / "operator-target"
+        symlink_target.mkdir()
+        operator_file = symlink_target / "operator.txt"
+        operator_file.write_text("retain this byte string", encoding="utf-8")
+        exact.symlink_to(symlink_target, target_is_directory=True)
+        retained.append(exact)
+    elif unsafe_case == "regular-file":
+        exact.write_text("operator-owned", encoding="utf-8")
+        retained.append(exact)
+    elif unsafe_case == "malformed":
+        malformed = artifact_root / f".{run_id}.short"
+        malformed.mkdir()
+        retained.append(malformed)
+    elif unsafe_case == "ambiguous":
+        exact.mkdir()
+        second = artifact_root / f".{run_id}.ijklmnop"
+        second.mkdir()
+        retained.extend((exact, second))
+    elif unsafe_case == "unknown-run":
+        exact.mkdir()
+        unknown = artifact_root / ".zzzz-unknown-run.abcdefgh"
+        unknown.mkdir()
+        retained.extend((exact, unknown))
+    else:
+        exact.mkdir()
+        nested = exact / "nested"
+        nested.mkdir()
+        operator_file = nested / "operator.txt"
+        operator_file.write_text("retain this byte string", encoding="utf-8")
+        retained.append(exact)
+
+    with pytest.raises(ProjectCampaignError):
+        service.recover_interrupted("campaign-a")
+
+    assert state_path.read_bytes() == state_before
+    for path in retained:
+        assert path.exists() or path.is_symlink()
+    if unsafe_case == "regular-file":
+        assert exact.read_text(encoding="utf-8") == "operator-owned"
+    if operator_file is not None:
+        assert operator_file.read_bytes() == b"retain this byte string"
+    if symlink_target is not None:
+        assert exact.is_symlink()
+        assert symlink_target.is_dir()
+
+
+def test_completed_run_staging_lookalike_blocks_recovery_without_byte_changes(
+    tmp_path: Path,
+) -> None:
+    project = _create(tmp_path, _definition(replicate_count=2, points=1))
+    call_count = 0
+
+    def interrupt_second(request: RunExecutionRequest, output: Path) -> None:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise KeyboardInterrupt
+        (output / "immutable.txt").write_text(request.run.run_id, encoding="utf-8")
+
+    service = CampaignService(project, executor=interrupt_second)
+    with pytest.raises(KeyboardInterrupt):
+        service.resume("campaign-a")
+    state_path = project / "campaign_state.json"
+    state_before = state_path.read_bytes()
+    state = json.loads(state_before)
+    completed = next(run for run in state["runs"] if run["status"] == "completed")
+    completed_root = project / "artifacts" / completed["run_id"]
+    completed_bytes = {
+        path.relative_to(completed_root).as_posix(): path.read_bytes()
+        for path in sorted(completed_root.rglob("*"))
+        if path.is_file()
+    }
+    lookalike = project / "artifacts" / f".{completed['run_id']}.abcdefgh"
+    lookalike.mkdir()
+
+    with pytest.raises(ProjectCampaignError, match="not associated"):
+        service.recover_interrupted("campaign-a")
+
+    assert state_path.read_bytes() == state_before
+    assert lookalike.is_dir()
+    assert {
+        path.relative_to(completed_root).as_posix(): path.read_bytes()
+        for path in sorted(completed_root.rglob("*"))
+        if path.is_file()
+    } == completed_bytes
+
+
+@pytest.mark.parametrize(
+    "invalid_trace",
+    [None, [], "not-a-portable-trace"],
+    ids=["null", "list", "scalar"],
+)
+def test_completed_receipt_rejects_non_object_portable_trace(
+    tmp_path: Path,
+    invalid_trace: object,
+) -> None:
+    project = _create(tmp_path, _definition(replicate_count=1, points=1))
+
+    def executor(request: RunExecutionRequest, output: Path) -> None:
+        (output / "immutable.txt").write_text(request.run.run_id, encoding="utf-8")
+
+    service = CampaignService(project, executor=executor)
+    assert service.resume("campaign-a").completed == 1
+    state_path = project / "campaign_state.json"
+    state_before = state_path.read_bytes()
+    run_id = json.loads(state_before)["runs"][0]["run_id"]
+    receipt_path = project / "artifacts" / run_id / COMPLETION_RECEIPT
+    receipt = json.loads(receipt_path.read_bytes())
+    receipt["portable_trace"] = invalid_trace
+    receipt_path.write_text(
+        json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProjectCampaignError, match="invalid portable completion trace"):
+        service.status("campaign-a")
+
+    assert state_path.read_bytes() == state_before
 
 
 def test_completed_artifact_drift_blocks_resume_and_retry(tmp_path: Path) -> None:

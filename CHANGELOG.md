@@ -4,6 +4,32 @@ All notable repository changes are documented here.
 
 ## Unreleased
 
+### Fixed
+
+- P6A-001 remediation – Interrupted campaign recovery now reconciles only one
+  exact empty direct-child staging directory whose strict tempfile name maps
+  to the known `running` run in the requested campaign and whose canonical
+  artifact directory is absent. Recovery validates the complete artifact
+  layout and all completed bytes first, rechecks the candidate by device and
+  inode, removes it only with nonrecursive `rmdir`, and then records the
+  explicit retryable interruption. Symlinked, non-directory, nonempty,
+  malformed, ambiguous, unknown-run, non-running, completed-run, and
+  canonical-directory lookalikes fail without deletion or state/artifact
+  mutation. The portable-project exporter remains strict about unexpected
+  paths; its completion-receipt validator now shares the campaign validator's
+  exact field sets so governed P6 `portable_trace` objects survive subsequent
+  export/verify/import while null, scalar, list, legacy, or unknown extensions
+  remain rejected. A real subprocess `SIGKILL` regression covers fresh
+  two-project portable activation, stale-worker recovery, explicit retry and
+  restart, prior-byte immutability, artifact/trace separation, reports, and
+  completed project archive round trips. The 75-test P6/P4 remediation
+  collection, unchanged 118-test P5 collection, 366-test accepted P1-P5
+  collection, and 390-test full suite pass on Python 3.14.4, together with the
+  host sandbox, CLI, Ruff, mypy, and diff gates. Runtime and generated-record
+  version remains 0.6.0. This is production remediation only: P6A remains
+  `INCOMPLETE` and requires a fresh independent audit from the exact pushed
+  remediation commit.
+
 ### Added
 
 - P6-WP04 – Published the complete supported migration/version matrix and
