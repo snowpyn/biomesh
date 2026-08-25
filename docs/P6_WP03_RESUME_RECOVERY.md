@@ -114,3 +114,39 @@ suite with no failures or skips, plus Ruff, strict mypy over 72 source files,
 module help, and diff checks. This remediates P6A-001 only; P6A remains
 `INCOMPLETE` and requires a fresh independent audit from the exact pushed
 remediation commit.
+
+## P6A-002 production-remediation evidence
+
+The fresh P6A rerun exposed a boundary where queue cancellation could observe
+one completed run plus later pending runs after SIGTERM, then persist terminal
+`cancelled` without any explicit failed campaign run. The deterministic
+pre-edit injection reproduced `1 completed / 1 pending / 0 failed` and the
+subsequent `queue retry` rejection for “no explicit failed campaign runs.”
+
+Running cancellation now persists one campaign-owned acknowledgement before
+queue terminalization. A persisted running attempt becomes `cancelled`; when
+the signal lands between campaign run boundaries, the next pending attempt is
+durably recorded as `cancelled` instead. A completion receipt already published
+at the atomic boundary is recovered and preserved before selecting later work.
+Repeated or restart recovery consumes the same acknowledgement without adding
+a second failure/audit transition. Explicit retry plus a fresh worker runs only
+the retained failed attempt at the next attempt number; a fully completed item
+remains non-retryable.
+
+Signal delivery opens a Linux pidfd and rechecks the persisted process-start
+identity before sending SIGTERM through that descriptor. The former startup
+wait is removed. Atomic state-write unwinding cleans only the exact regular
+device/inode created by that live write. Any pre-existing or crash-left
+campaign-state temporary has no durable ownership proof, remains untouched,
+and blocks recovery rather than being guessed or recursively removed.
+
+Ten deterministic tests cover cancellation after claim, while durably running,
+after completed publication, before campaign-state replace, and before queue
+terminal replace; owned-temp cleanup; unowned empty/nonempty/malformed/symlink
+rejection; retry attempt identity; audit uniqueness; and pidfd identity. The
+suite passed 25 consecutive repetitions. The real subprocess SIGTERM,
+explicit-retry, and fresh-worker path passed 10 consecutive repetitions with
+exact PID/start verification and completed-byte equality. Python 3.14.4 passed
+the 85-test P6/P4 remediation collection, unchanged 118-test P5 collection,
+366-test accepted P1-P5 collection, and 400-test full suite without failures or
+skips. P6A remains `INCOMPLETE`; this is production remediation only.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import resource
+import signal
 from pathlib import Path
 from types import FrameType
 
@@ -85,6 +86,32 @@ def worker_identity_is_live(pid: int, start_ticks: int) -> bool:
         return process_start_ticks(pid) == start_ticks
     except LocalQueueError:
         return False
+
+
+def terminate_worker_identity(pid: int, start_ticks: int) -> bool:
+    """Send SIGTERM only through a pidfd for the exact persisted process."""
+    try:
+        descriptor = os.pidfd_open(pid)
+    except ProcessLookupError:
+        return False
+    except OSError as error:
+        raise LocalQueueError(
+            f"unable to open exact local worker process {pid}: {error}"
+        ) from error
+    try:
+        if process_start_ticks(pid) != start_ticks:
+            return False
+        try:
+            signal.pidfd_send_signal(descriptor, signal.SIGTERM)
+        except ProcessLookupError:
+            return False
+        except OSError as error:
+            raise LocalQueueError(
+                f"unable to terminate exact local worker process {pid}: {error}"
+            ) from error
+        return True
+    finally:
+        os.close(descriptor)
 
 
 def item_worker_is_live(item: QueueItem) -> bool:

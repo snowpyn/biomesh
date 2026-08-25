@@ -4,26 +4,27 @@ This file is the canonical snapshot of the repository's current development
 state. Read it immediately after `docs/STANDARDS.md` before selecting work.
 `docs/PHASE_STATUS.md` remains the authoritative ordered work-package tracker.
 
-Snapshot verified: 2026-08-24 for P6A-001 production remediation on
-`phase-6-portable-operations`. The frozen independent P6A run from `v0.6.0`
-found a HIGH interrupted-staging/export blocker. The remediation reconciles
-only an exact empty stage belonging to the known interrupted run, preserves
-the strict archive gate and completed bytes, and aligns traced completion
-receipt validation across campaign and archive boundaries. Python 3.14.4
-passes the 75-test P6/P4 remediation collection, the unchanged 118-test P5
-collection, the 366-test accepted P1-P5 collection, and the 390-test full
-gate. Phase 5 remains the latest accepted phase at `v0.5.1-audit`; runtime and
-generated records remain 0.6.0. P6A remains incomplete pending a fresh
-independent rerun from the exact pushed remediation commit.
+Snapshot verified: 2026-08-24 for P6A-002 production remediation on
+`phase-6-portable-operations`. After P6A-001, the fresh independent P6A rerun
+found a HIGH cancellation/retry boundary where terminal queue cancellation
+could lack a failed campaign attempt. The remediation requires one durable
+campaign cancellation acknowledgement, exact pidfd signalling, and fail-closed
+handling for unowned campaign-state temporary siblings while preserving every
+completed byte and P6 portable identity. Python 3.14.4 passes the 85-test
+P6/P4 remediation collection, unchanged 118-test P5 collection, 366-test
+accepted P1-P5 collection, and 400-test full gate. Phase 5 remains the latest
+accepted phase at `v0.5.1-audit`; runtime and generated records remain 0.6.0.
+P6A remains incomplete pending a fresh independent rerun from the exact pushed
+P6A-002 remediation commit.
 
 | Field | Current state |
 | --- | --- |
-| Current phase | P6 – Phase 6 – Portable Operations (P6A-001 remediated; P6A remains incomplete) |
+| Current phase | P6 – Phase 6 – Portable Operations (P6A-001 and P6A-002 remediated; P6A remains incomplete) |
 | Current work package | P6A – Phase 6 Audit (`INCOMPLETE`; fresh independent rerun required) |
-| Current branch | `phase-6-portable-operations` after P6A-001 production remediation |
+| Current branch | `phase-6-portable-operations` after P6A-002 production remediation |
 | Latest accepted phase | P5 – Phase 5 – Security and Distribution Hardening, accepted by P5A on 2026-08-15 |
 | Latest version tag | `v0.6.0` (P6 implementation prerequisite; not phase acceptance) |
-| Current test count | 390 passed, 0 failed, 0 skipped (`pytest -q`, 2026-08-24) |
+| Current test count | 400 passed, 0 failed, 0 skipped (`pytest -q`, 2026-08-24) |
 | Next planned work package | Fresh independent P6A rerun from the exact pushed remediation commit; P7 and later work remain unauthorized |
 
 ## Outstanding technical debt
@@ -258,6 +259,24 @@ independent rerun from the exact pushed remediation commit.
   all earlier completed bytes unchanged. This is remediation evidence, not P6
   acceptance; a fresh independent P6A rerun from the exact pushed remediation
   commit remains mandatory.
+- The fresh P6A rerun after P6A-001 reproduced P6A-002: cancellation between a
+  durably completed run and the next durable `running` state could terminalize
+  the queue as cancelled while the campaign had pending work but no explicit
+  failed run, making queue retry impossible. Running cancellation now requires
+  exactly one durable campaign-side `cancelled` attempt before terminal queue
+  cancellation. The affected run is the persisted running run, or the next
+  pending run when the signal lands between boundaries. Published completions
+  remain completed and byte-immutable; explicit retry executes only the failed
+  attempt at the next attempt number under a fresh worker. Pidfd delivery binds
+  the exact persisted PID/process-start identity without a sleep window.
+  Orderly atomic-write cleanup removes only the exact regular inode created by
+  that live write; unowned empty/nonempty/malformed/symlinked state siblings
+  remain untouched and block reconciliation because no durable ownership
+  journal exists. Deterministic boundary tests passed 25 repetitions, the real
+  subprocess SIGTERM/retry path passed 10, and the complete 400-test gate plus
+  P5 and host-sandbox regressions passed. P6A remains `INCOMPLETE`; only a fresh
+  independent rerun from the exact pushed P6A-002 remediation commit may assess
+  Phase 6 acceptance.
 
 ## Pre-v1 roadmap boundary
 

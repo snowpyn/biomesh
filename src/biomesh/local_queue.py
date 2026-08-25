@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import signal
-import time
 from pathlib import Path
 
 from biomesh.local_queue_runtime import (
@@ -13,6 +12,7 @@ from biomesh.local_queue_runtime import (
     cancel_worker,
     item_worker_is_live,
     process_start_ticks,
+    terminate_worker_identity,
     worker_identity_is_live,
 )
 from biomesh.local_queue_storage import (
@@ -172,24 +172,7 @@ class LocalQueueService:
             assert requested.worker_start_ticks is not None
             worker = (requested.worker_pid, requested.worker_start_ticks)
         if worker_identity_is_live(*worker):
-            # The queue state becomes RUNNING after prospective execution
-            # preflight, while campaign startup still has to reacquire and
-            # verify the project. Give that accepted startup a bounded window
-            # to persist its first run boundary before delivering SIGTERM.
-            deadline = time.monotonic() + 5.0
-            while time.monotonic() < deadline:
-                progress = CampaignService(
-                    Path(requested.project_directory)
-                ).progress(requested.campaign_id)
-                if progress.running or not progress.pending:
-                    break
-                if not worker_identity_is_live(*worker):
-                    break
-                time.sleep(0.001)
-            try:
-                os.kill(worker[0], signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+            terminate_worker_identity(*worker)
         return requested
 
     def retry(self, queue_id: str) -> QueueItem:
@@ -299,7 +282,9 @@ class LocalQueueService:
         previous_term = signal.signal(signal.SIGTERM, cancel_worker)
         try:
             execution_failure: str | None = None
+            cancellation_run_id: str | None = None
             action: QueueAuditAction
+            campaign: CampaignStatus | None
             try:
                 trace = (
                     None
@@ -320,12 +305,7 @@ class LocalQueueService:
                 requested = self._current_item(item.queue_id).cancel_requested
             except WorkerCancellation:
                 requested = True
-                campaign = CampaignService(
-                    Path(item.project_directory)
-                ).recover_interrupted(
-                    item.campaign_id,
-                    cancellation_requested=True,
-                )
+                campaign = None
             except Exception as error:
                 requested = False
                 execution_failure = (
@@ -341,6 +321,12 @@ class LocalQueueService:
                         f"{str(recovery_error) or recovery_error.__class__.__name__}"
                     )
                     campaign = None
+            if execution_failure is None and requested:
+                cancellation = CampaignService(
+                    Path(item.project_directory)
+                ).persist_queue_cancellation(item.campaign_id)
+                campaign = cancellation.campaign
+                cancellation_run_id = cancellation.cancelled_run_id
             if execution_failure is not None:
                 status = QueueItemStatus.FAILED
                 failure = execution_failure
@@ -351,7 +337,7 @@ class LocalQueueService:
                 failure = None
                 action = "campaign_completed"
                 detail = f"completed {campaign.completed} immutable runs"
-            elif requested:
+            elif requested and cancellation_run_id is not None:
                 status = QueueItemStatus.CANCELLED
                 failure = None
                 action = "campaign_cancelled"
@@ -411,17 +397,22 @@ class LocalQueueService:
         for item in tuple(current.items):
             if item.status is not QueueItemStatus.RUNNING or item_worker_is_live(item):
                 continue
-            campaign = CampaignService(
-                Path(item.project_directory)
-            ).recover_interrupted(
-                item.campaign_id,
-                cancellation_requested=item.cancel_requested,
-            )
+            cancellation_run_id: str | None = None
+            if item.cancel_requested:
+                cancellation = CampaignService(
+                    Path(item.project_directory)
+                ).persist_queue_cancellation(item.campaign_id)
+                campaign = cancellation.campaign
+                cancellation_run_id = cancellation.cancelled_run_id
+            else:
+                campaign = CampaignService(
+                    Path(item.project_directory)
+                ).recover_interrupted(item.campaign_id)
             if campaign.completed == campaign.total:
                 status = QueueItemStatus.COMPLETED
                 failure = None
                 detail = "recovered completed campaign after local worker exit"
-            elif item.cancel_requested:
+            elif item.cancel_requested and cancellation_run_id is not None:
                 status = QueueItemStatus.CANCELLED
                 failure = None
                 detail = "recovered cancelled work after local worker exit"

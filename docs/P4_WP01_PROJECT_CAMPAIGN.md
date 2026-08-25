@@ -74,6 +74,17 @@ are never scheduled by resume or retry, and any later artifact change fails
 closed. Failed runs retain their error and attempt count until `campaign retry`
 is explicitly requested.
 
+The P4 queue cancellation boundary uses one additional durable handshake. If
+the queue's exact worker receives cancellation while no campaign run is
+currently persisted `running`—including immediately after queue claim or after
+a completed publication—the next pending run is recorded as one explicit
+retryable `cancelled` attempt before the queue may become terminal cancelled.
+If a run is already `running`, the existing recovery transition records that
+same attempt as cancelled. A published completion is recovered as completed
+first and is never relabelled. Repeated recovery recognizes the existing exact
+cancellation and does not append another transition; explicit retry advances
+only that failed run to the next attempt.
+
 If process death bypasses staging cleanup, the recovery path may remove only
 one empty, nonsymlinked direct child named exactly
 `.<running-run-id>.<eight Python-3.14 tempfile characters>`. The run must be the
@@ -88,6 +99,12 @@ completed directory, or arbitrary operator file. Such state fails explicitly
 without cleanup or state/artifact mutation. Ordinary status/report verification
 does not hide an unreconciled staging directory; use the supported resume,
 retry, or P4-WP05 stale-worker recovery boundary.
+
+Campaign-state atomic replacement removes a temporary sibling on orderly
+unwinding only when it is the exact regular device/inode created by that live
+write attempt. A pre-existing or crash-left `.campaign_state.json.*` sibling
+has no authenticated durable ownership record, so cancellation/recovery fails
+closed and leaves it untouched regardless of its name, type, or contents.
 
 ## CLI application paths
 

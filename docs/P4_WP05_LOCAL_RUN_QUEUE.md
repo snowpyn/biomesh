@@ -47,12 +47,17 @@ running campaign lock. Every terminal status uses the full campaign verifier,
 including completed artifact hashes and completion receipts.
 
 Queued cancellation changes only queue state. Running cancellation records the
-request, verifies the worker PID plus Linux process-start identity, and sends
-`SIGTERM` only to that exact local process. The worker stops through a dedicated
-base exception so a broad run-failure handler cannot continue later runs.
+request, opens a Linux pidfd, re-verifies the worker PID plus process-start
+identity against that handle, and sends `SIGTERM` only through the exact local
+process descriptor. The worker stops through a dedicated base exception so a
+broad run-failure handler cannot continue later runs.
 Publication already completed at the accepted atomic boundary remains
-completed and immutable; an unpublished running run becomes an explicit
-retryable `cancelled` campaign failure, while later planned runs remain pending.
+completed and immutable. Before the queue becomes terminal `cancelled`, the
+campaign must durably contain exactly one explicit retryable `cancelled`
+attempt: either the unpublished persisted running run, or the next pending run
+when cancellation lands between durable run boundaries. Later work remains
+explicit and requires retry; no startup sleep, automatic retry, or fallback is
+used.
 
 On every status, enqueue, or drain operation, a persisted `running` item whose
 exact worker identity is no longer live is reconciled. A published run is
@@ -71,6 +76,13 @@ campaign state changes and leaves every path untouched. Operators must inspect
 and preserve such uncertain state; queue status never recursively deletes or
 guesses ownership. An explicit `queue retry` remains required after safe stale
 recovery and completed work is never scheduled again.
+
+Orderly SIGTERM unwinding removes only the exact regular queue/campaign-state
+temporary inode created by the interrupted live atomic write. Any independently
+present or crash-left campaign-state sibling lacks durable ownership evidence,
+blocks reconciliation, and remains untouched. Repeated recovery consumes an
+already persisted cancellation acknowledgement without duplicating its run or
+queue audit transition.
 
 ## Application paths
 

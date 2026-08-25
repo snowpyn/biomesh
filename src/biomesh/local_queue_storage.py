@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import os
 import shutil
+import stat
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -211,12 +212,39 @@ def _write_bytes(path: Path, contents: bytes) -> None:
 def _atomic_write_bytes(path: Path, contents: bytes) -> None:
     descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary = Path(name)
+    identity = os.fstat(descriptor)
     try:
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(contents)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
-    except Exception:
-        temporary.unlink(missing_ok=True)
+    except BaseException:
+        _unlink_owned_atomic_temporary(temporary, identity)
         raise
+
+
+def _unlink_owned_atomic_temporary(path: Path, identity: os.stat_result) -> None:
+    """Remove only the exact regular inode created by this write attempt."""
+    try:
+        current = path.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise LocalQueueError(
+            f"unable to inspect local queue atomic temporary {path.name}: {error}"
+        ) from error
+    if (
+        not stat.S_ISREG(current.st_mode)
+        or current.st_dev != identity.st_dev
+        or current.st_ino != identity.st_ino
+    ):
+        raise LocalQueueError(
+            f"local queue atomic temporary identity changed: {path.name}"
+        )
+    try:
+        path.unlink()
+    except OSError as error:
+        raise LocalQueueError(
+            f"unable to remove owned local queue atomic temporary {path.name}: {error}"
+        ) from error

@@ -1130,6 +1130,45 @@ incomplete):
   pushed remediation commit. No accepted-audit record, phase acceptance,
   merge, audit branch, or tag is created by this remediation.
 
+P6A-002 production-remediation evidence (2026-08-24; audit remains
+incomplete):
+
+- A deterministic pre-edit barrier reproduced the HIGH cancellation defect at
+  the exact completed-to-next-run boundary: the queue persisted terminal
+  `cancelled` with `cancel_requested=true`, while campaign state contained one
+  completed run, one pending run, and zero failed runs. `queue retry` then
+  rejected the item because it had no explicit failed campaign run.
+- Queue cancellation now requires one durable campaign acknowledgement before
+  terminal cancellation. A persisted running attempt becomes an explicit
+  retryable `cancelled` failure; if SIGTERM lands after claim, during state
+  publication, or between completed and next-running state, the next pending
+  attempt becomes the single explicit cancellation. Published completions are
+  recovered and preserved first. Repeated recovery consumes the same
+  acknowledgement without duplicate run or queue transitions.
+- Signal delivery uses a Linux pidfd after exact persisted PID/process-start
+  verification. The prior startup sleep is removed. Orderly campaign/queue
+  state-write interruption removes only the exact regular device/inode created
+  by that live write attempt. Independently present, malformed, symlinked,
+  empty, or nonempty campaign-state siblings have no durable ownership proof,
+  fail closed, and remain untouched.
+- Ten focused deterministic tests cover after-claim, durably-running,
+  completed-publication, campaign-state-before-replace, and
+  queue-terminal-before-replace windows; exact retry attempt identity;
+  completed-byte equality; no partial publication; audit uniqueness;
+  uncertain-temp rejection; and pidfd identity. They passed 25 consecutive
+  repetitions. The real subprocess SIGTERM/explicit-retry/fresh-worker path
+  passed 10 consecutive repetitions with exact PID/start verification and no
+  completed-byte rewrite.
+- Python 3.14.4 passed the 85-test P6/P4 remediation collection, unchanged
+  118-test accepted P5 collection, 366-test accepted P1-P5 collection, and
+  400-test full suite with no failures or skips. Bubblewrap 0.11.1,
+  util-linux `prlimit` 2.41.3, libseccomp 2.6.0, and all 22 sandbox tests
+  passed. Runtime/package/generated-manifest version remains 0.6.0.
+- This evidence remediates production finding P6A-002 only. P6A remains
+  `INCOMPLETE`; it must rerun as a fresh independent audit from the exact
+  pushed remediation commit. No accepted-audit record, phase acceptance,
+  merge, audit branch, audit tag, or P7 behavior is included.
+
 ## P7 – Phase 7 – Calibration and Validation
 
 Source: `docs/10_PRE_V1_ROADMAP.md`.
@@ -1176,9 +1215,10 @@ Source: `docs/10_PRE_V1_ROADMAP.md`.
 ## Next Work Package
 
 `P6A – Phase 6 Audit` remains the first incomplete pre-v1 item. Because the
-frozen `v0.6.0` audit found P6A-001, it must rerun in a fresh independent task
-from the exact pushed P6A-001 remediation commit descended from `v0.6.0`, not
-from the original vulnerable tag alone. Remediation does not accept Phase 6
+frozen `v0.6.0` audit and its fresh rerun found P6A-001 and P6A-002, it must
+rerun in a fresh independent task from the exact pushed P6A-002 remediation
+commit descended from both `v0.6.0` and the pushed P6A-001 remediation, not
+from either vulnerable prerequisite alone. Remediation does not accept Phase 6
 or authorize P7.
 
 ## Remaining Issues

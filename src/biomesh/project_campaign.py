@@ -445,6 +445,14 @@ class CampaignStatus:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class QueueCancellationBoundary:
+    """Durable campaign acknowledgment consumed by queue terminalization."""
+
+    campaign: CampaignStatus
+    cancelled_run_id: str | None
+
+
 def load_project_definition(path: Path) -> ProjectDefinition:
     """Load one strict versioned JSON project definition."""
     payload = _read_json(path, label="project definition")
@@ -684,6 +692,70 @@ class CampaignService:
             )
             return _campaign_status(state, campaign_id)
 
+    def persist_queue_cancellation(
+        self, campaign_id: str
+    ) -> QueueCancellationBoundary:
+        """Persist exactly one retryable cancellation for active queue work."""
+        with self._lock():
+            definition, state = self._load(verify_artifacts=False)
+            _campaign(definition, campaign_id)
+            _require_execution_identity(definition, state, campaign_id)
+            state = self._reconcile_interrupted(
+                definition,
+                state,
+                campaign_id,
+                cancellation_requested=True,
+            )
+            cancelled = [
+                run
+                for run in state.runs
+                if run.campaign_id == campaign_id
+                and run.status is CampaignRunStatus.FAILED
+                and run.failure is not None
+                and run.failure.kind == "cancelled"
+            ]
+            if len(cancelled) > 1:
+                raise ProjectCampaignError(
+                    "campaign has ambiguous queue cancellation transitions"
+                )
+            if not cancelled:
+                pending = next(
+                    (
+                        run
+                        for run in state.runs
+                        if run.campaign_id == campaign_id
+                        and run.status is CampaignRunStatus.PENDING
+                    ),
+                    None,
+                )
+                if pending is not None:
+                    failure = RunFailureRecord(
+                        kind="cancelled",
+                        message=(
+                            "local queue cancellation stopped the next attempt "
+                            "before artifact publication"
+                        ),
+                    )
+                    acknowledged = pending.model_copy(
+                        update={
+                            "status": CampaignRunStatus.FAILED,
+                            "attempt_count": pending.attempt_count + 1,
+                            "failure": failure,
+                        }
+                    )
+                    state = _replace_run_with_audit(
+                        state,
+                        acknowledged,
+                        "run_failed",
+                        failure.message,
+                    )
+                    self._write_state(state)
+                    cancelled = [acknowledged]
+            return QueueCancellationBoundary(
+                campaign=_campaign_status(state, campaign_id),
+                cancelled_run_id=(cancelled[0].run_id if cancelled else None),
+            )
+
     @contextmanager
     def _lock(self, *, blocking: bool = True) -> Any:
         lock_path = self.project_directory / ".campaign.lock"
@@ -757,6 +829,7 @@ class CampaignService:
         *,
         cancellation_requested: bool = False,
     ) -> ProjectState:
+        self._reject_unowned_campaign_state_temporaries()
         staging = self._verify_artifact_layout(
             definition,
             state,
@@ -832,6 +905,26 @@ class CampaignService:
             self._remove_interrupted_artifact_staging(staging)
         self._write_state(updated)
         return updated
+
+    def _reject_unowned_campaign_state_temporaries(self) -> None:
+        """Fail closed on state-write siblings lacking durable ownership proof."""
+        prefix = f".{PROJECT_STATE}."
+        try:
+            candidates = sorted(
+                path.name
+                for path in self.project_directory.iterdir()
+                if path.name.startswith(prefix)
+            )
+        except OSError as error:
+            raise ProjectCampaignError(
+                f"unable to inspect campaign-state atomic temporaries: {error}"
+            ) from error
+        if candidates:
+            raise ProjectCampaignError(
+                "project contains unowned campaign-state atomic temporary "
+                "siblings; automatic reconciliation is unsafe: "
+                + ", ".join(candidates)
+            )
 
     def _execute_pending(
         self,
@@ -1632,12 +1725,40 @@ def _write_bytes(path: Path, contents: bytes) -> None:
 def _atomic_write_bytes(path: Path, contents: bytes) -> None:
     descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary = Path(name)
+    identity = os.fstat(descriptor)
     try:
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(contents)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
-    except Exception:
-        temporary.unlink(missing_ok=True)
+    except BaseException:
+        _unlink_owned_atomic_temporary(temporary, identity)
         raise
+
+
+def _unlink_owned_atomic_temporary(path: Path, identity: os.stat_result) -> None:
+    """Remove only the exact regular inode created by this write attempt."""
+    try:
+        current = path.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise ProjectCampaignError(
+            f"unable to inspect campaign-state atomic temporary {path.name}: {error}"
+        ) from error
+    if (
+        not stat.S_ISREG(current.st_mode)
+        or current.st_dev != identity.st_dev
+        or current.st_ino != identity.st_ino
+    ):
+        raise ProjectCampaignError(
+            f"campaign-state atomic temporary identity changed: {path.name}"
+        )
+    try:
+        path.unlink()
+    except OSError as error:
+        raise ProjectCampaignError(
+            f"unable to remove owned campaign-state atomic temporary {path.name}: "
+            f"{error}"
+        ) from error

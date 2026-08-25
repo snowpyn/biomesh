@@ -10,7 +10,9 @@ into a Linux desktop research platform.
 The latest accepted phase is **P5 – Phase 5 – Security and Distribution
 Hardening**, represented by `v0.5.1-audit`. P6-WP01 through P6-WP04 are
 implemented on the Phase 6 branch, and `v0.6.0` freezes that implementation for
-the still-required independent P6A portability audit. Phase 6 is not accepted.
+the still-required independent P6A portability audit. Production findings
+P6A-001 and P6A-002 are remediated on the implementation branch, but Phase 6
+is not accepted and requires a fresh independent audit rerun.
 
 The current desktop GUI has menus, docks, status, recent project references, an
 error console, separate UI preferences, a snapshot-only simulation viewer, a
@@ -257,8 +259,13 @@ python -m biomesh queue cancel QUEUE_DIRECTORY QUEUE_ID
 The worker applies exact Linux CPU affinity and an address-space byte cap before
 claiming work. Higher priorities run first and equal priorities remain FIFO.
 Queue status exposes campaign run counts during execution; cancellation and
-restart recovery retain completed artifact bytes and leave interrupted work as
-an explicit retryable failure. Queue references remain local absolute paths.
+restart recovery retain completed artifact bytes and leave exactly one affected
+attempt as an explicit retryable cancellation failure before the queue becomes
+terminal `cancelled`. Cancellation targets the exact persisted Linux
+PID/process-start identity through a pidfd, and explicit retry under a fresh
+worker schedules only retained failed work. Unowned campaign-state atomic
+temporary siblings fail closed and remain untouched. Queue references remain
+local absolute paths.
 See [the P4-WP05 queue contract](docs/P4_WP05_LOCAL_RUN_QUEUE.md).
 
 For clean-install queue-intent migration, explicit destination rebinding,

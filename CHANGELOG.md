@@ -6,6 +6,28 @@ All notable repository changes are documented here.
 
 ### Fixed
 
+- P6A-002 remediation – Running queue cancellation now requires a durable
+  campaign-side acknowledgement before the queue item may become terminal
+  `cancelled`. If SIGTERM arrives after claim but before the first durable
+  `running` state, during execution, after completed publication, during the
+  campaign-state atomic write, or before queue terminal publication, exactly
+  one affected attempt becomes an explicit retryable `cancelled` failure while
+  every completed publication remains byte-immutable. Explicit queue retry and
+  a fresh worker execute only that retained failed attempt at the next attempt
+  number. Cancellation signals use a Linux pidfd after exact PID/process-start
+  verification, eliminating the prior check/signal identity gap and the
+  sleep-based startup window. Orderly interrupted state writes remove only the
+  exact regular temporary inode created by that write; any pre-existing,
+  malformed, symlinked, ambiguous, or otherwise unowned campaign-state sibling
+  blocks reconciliation and remains untouched. Deterministic tests cover every
+  cancellation/publication window and failure atomicity; the real subprocess
+  SIGTERM/retry path verifies fresh-worker completion, audit uniqueness, and
+  prior completed-byte equality. The 85-test P6/P4 remediation collection,
+  unchanged 118-test P5 collection, 366-test accepted P1-P5 collection, and
+  400-test full suite pass on Python 3.14.4, together with repeated signal
+  stress, the host sandbox, CLI, Ruff, mypy, and diff gates. Runtime and
+  generated-record version remains 0.6.0. P6A remains `INCOMPLETE` and requires
+  a fresh independent rerun from the exact pushed remediation commit.
 - P6A-001 remediation – Interrupted campaign recovery now reconciles only one
   exact empty direct-child staging directory whose strict tempfile name maps
   to the known `running` run in the requested campaign and whose canonical

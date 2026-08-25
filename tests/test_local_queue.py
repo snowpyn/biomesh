@@ -14,6 +14,7 @@ import pytest
 
 from biomesh.__main__ import main
 from biomesh.local_queue import LocalQueueError, LocalQueueService
+from biomesh.local_queue_runtime import process_start_ticks
 from biomesh.local_queue_types import (
     AppliedResourceLimits,
     LocalQueueState,
@@ -308,15 +309,20 @@ def test_running_cli_cancellation_is_persistent_and_retryable(
     )
     deadline = time.monotonic() + 15
     observed_running = False
+    running_item = None
     while time.monotonic() < deadline:
         snapshot = LocalQueueService(queue).status()
         if snapshot.items[0].item.status is QueueItemStatus.RUNNING:
             observed_running = True
+            running_item = snapshot.items[0].item
             break
         if worker.poll() is not None:
             break
         time.sleep(0.01)
     assert observed_running, "queue worker completed before cancellation probe"
+    assert running_item is not None
+    assert running_item.worker_pid == worker.pid
+    assert running_item.worker_start_ticks == process_start_ticks(worker.pid)
 
     competing_worker = _run_queue_subprocess(queue, "--once")
     assert competing_worker.returncode == 2
@@ -342,3 +348,39 @@ def test_running_cli_cancellation_is_persistent_and_retryable(
         run["status"] != "completed" or run["artifacts"]
         for run in campaign_state["runs"]
     )
+    completed_bytes = {
+        path.relative_to(project).as_posix(): path.read_bytes()
+        for path in sorted((project / "artifacts").rglob("*"))
+        if path.is_file()
+    }
+
+    assert main(["queue", "retry", str(queue), item.queue_id]) == 0
+    capsys.readouterr()
+    restarted = _run_queue_subprocess(queue, "--once")
+    assert restarted.returncode == 0, restarted.stderr
+    assert json.loads(restarted.stdout) == {
+        "cancelled": 0,
+        "completed": 1,
+        "executed": 1,
+        "failed": 0,
+    }
+    completed = LocalQueueService(queue).status().items[0]
+    assert completed.item.status is QueueItemStatus.COMPLETED
+    assert (completed.campaign.completed, completed.campaign.failed) == (40, 0)
+    final_state = json.loads((project / "campaign_state.json").read_text())
+    final_cancelled_run = next(
+        run
+        for run in final_state["runs"]
+        if run["run_id"] == cancelled_runs[0]["run_id"]
+    )
+    assert final_cancelled_run["attempt_count"] == 2
+    final_bytes = {
+        path.relative_to(project).as_posix(): path.read_bytes()
+        for path in sorted((project / "artifacts").rglob("*"))
+        if path.is_file()
+    }
+    assert all(
+        final_bytes[path] == contents for path, contents in completed_bytes.items()
+    )
+    with pytest.raises(LocalQueueError, match="not retryable: completed"):
+        LocalQueueService(queue).retry(item.queue_id)

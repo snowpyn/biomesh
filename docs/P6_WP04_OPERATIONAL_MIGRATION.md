@@ -195,12 +195,18 @@ python -m biomesh queue status /srv/biomesh/destination/queue
 ```
 
 Cancellation preserves completed publications. Interrupted unpublished work
-becomes an explicit retryable failure. After crash/restart, `queue status`
-verifies the dead worker identity and reconciles completed/cancelled/interrupted
-state. If `SIGKILL` left one exact empty direct-child stage for the persisted
-running run, this supported recovery validates all artifact paths and completed
-bytes, removes only that inode-checked empty directory with `rmdir`, and then
-records `interrupted`. It does not delete partial contents or guess ownership.
+becomes an explicit retryable failure. Terminal `cancelled` requires one
+durable campaign cancellation acknowledgement: the persisted running attempt,
+or the next pending attempt if SIGTERM lands after queue claim or between run
+publications. The exact worker is signalled through a Linux pidfd only after
+its persisted PID/process-start identity matches; there is no startup sleep.
+After crash/restart, `queue status` verifies the dead worker identity and
+reconciles completed/cancelled/interrupted state without duplicating the
+acknowledgement. If `SIGKILL` left one exact empty direct-child artifact stage
+for the persisted running run, this supported recovery validates all artifact
+paths and completed bytes, removes only that inode-checked empty directory with
+`rmdir`, and then records `interrupted`. It does not delete partial contents or
+guess ownership.
 Inspect, then retry only retained failed work:
 
 ```bash
@@ -275,6 +281,12 @@ project roots and are never copied into queue records, rewritten, or rerun.
   blocks status/report/export until an operator resolves ownership; supporting
   authenticated nonempty-stage recovery would require a new governed journal
   and is outside P6A-001.
+- Orderly cancellation can remove a state-write temporary only while the live
+  write still proves the exact regular device/inode it created. A pre-existing
+  or crash-left `.campaign_state.json.*` sibling has no authenticated durable
+  ownership evidence, remains untouched, and blocks cancellation/recovery.
+  Supporting automatic reconciliation of such state would require a new
+  governed ownership journal and is outside P6A-002.
 - All biology remains `CALIBRATION_REQUIRED`; no calibration is promoted.
 - P6A is a separate independent audit. `v0.6.0` is its historical frozen
   baseline; after P6A-001, the fresh rerun prerequisite is the exact pushed
@@ -332,3 +344,23 @@ strict mypy over 72 source files, module help, documented examples or automated
 equivalents, and diff checks. P6A remains `INCOMPLETE`; these records require a
 fresh independent P6A rerun from the exact pushed remediation commit and do not
 accept Phase 6 or authorize P7.
+
+### P6A-002 remediation rehearsal
+
+A deterministic barrier first reproduced terminal queue cancellation with a
+campaign at `1 completed / 1 pending / 0 failed`, followed by the expected
+retry rejection. The remediation tests then exercised every queue/campaign
+publication window, including the campaign-state temporary write and queue
+terminal replace. Each window produced exactly one explicit retryable
+`cancelled` attempt, no partial state publication, no owned temporary sibling,
+and completion of only remaining work at attempt 2 after explicit retry.
+Unowned empty, nonempty, malformed, and symlinked campaign-state siblings
+failed without deletion or state transition.
+
+The focused deterministic suite passed 25 consecutive repetitions and the real
+subprocess SIGTERM/exact-PID-start/retry/fresh-worker path passed 10 consecutive
+repetitions. Python 3.14.4 passed 85 P6/P4 tests, the unchanged 118-test P5
+collection, 366 accepted P1-P5 tests, and the 400-test complete suite with no
+failures or skips. Bubblewrap 0.11.1, util-linux `prlimit` 2.41.3,
+libseccomp 2.6.0, and all 22 sandbox tests passed. Runtime/package/generated
+manifest version remains 0.6.0. This does not accept P6A or authorize P7.

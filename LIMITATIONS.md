@@ -35,7 +35,21 @@
   local Linux operation with no cloud/remote scheduler, automatic path
   guessing, UI workflow, or performance recommendation.
 - P6 implementation is frozen by `v0.6.0` only as an audit prerequisite.
-  Phase 6 remains unaccepted until a fresh independent P6A passes.
+  P6A-001 and P6A-002 production remediations do not accept Phase 6; it remains
+  unaccepted until a fresh independent P6A passes from the exact pushed
+  remediation commit.
+- Running cancellation now requires a durable explicit campaign cancellation
+  attempt before terminal queue cancellation and uses Linux pidfd signaling
+  for the exact persisted PID/process-start identity. This remains a local
+  Linux supervision boundary; host/kernel compromise and host-wide process
+  exhaustion remain outside the guarantee.
+- An orderly interrupted campaign/queue state write removes only the exact
+  regular temporary inode created and still owned by that live write attempt.
+  A sibling left by hard process death or supplied independently has no durable
+  ownership journal. Empty, nonempty, malformed, symlinked, or otherwise
+  uncertain `.campaign_state.json.*` siblings therefore remain untouched and
+  block automatic cancellation/recovery until ownership is resolved outside
+  BioMesh. The remediation does not guess, recursively clean, or adopt them.
 
 ## P5-WP01 – Threat model and security requirements
 
